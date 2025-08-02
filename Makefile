@@ -6,7 +6,10 @@ run-client:
 	export RAYLIB_BUILD_PATH=$(RAYLIB_BUILD_PATH) && \
 	dotnet run --project client
 
-build_raylib:
+run-server: 
+	dotnet run --project server
+
+build-raylib:
 	mkdir -p $(RAYLIB_PATH)/build
 	cmake -S $(RAYLIB_PATH) -B $(RAYLIB_PATH)/build \
 		-DBUILD_SHARED_LIBS=ON \
@@ -15,5 +18,5 @@ build_raylib:
 	cmake --build $(RAYLIB_PATH)/build --config Release -j8
 
 
-clean_raylib:
+clean-raylib:
 	rm -rf $(RAYLIB_PATH)/build
