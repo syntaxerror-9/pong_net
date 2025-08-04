@@ -1,2 +1,0 @@
-MacOS system headers are in /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/sys
-(Since im using posix sockets, i need to find the enum values)

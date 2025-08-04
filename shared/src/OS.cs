@@ -3,10 +3,21 @@ using System.Runtime.InteropServices;
 
 namespace shared;
 
+using socklen_t = uint;
+using size_t = nint;
+
 public static partial class OS
 {
-    public static int SOCK_DGRAM = 2;
-    public static int AF_INET = 2;
+    public const int SOCK_DGRAM = 2;
+    public const int AF_INET = 2;
+    public const int F_SETFD = 2; // Set file descriptor
+    public const int F_GETFL = 3;
+    public const int F_SETFL = 4; // Set file status flags
+    public const ulong FIONBIO = 2147772030;
+    public const int EAGAIN = 35;
+    public const int EWOULDBLOCK = EAGAIN;
+
+    public const int O_NONBLOCK = 0x00000004;
 
     [LibraryImport("libc")]
     public static partial void printf([MarshalAs(UnmanagedType.LPStr)] string str);
@@ -25,7 +36,7 @@ public static partial class OS
 
     // https://man7.org/linux/man-pages/man3/bind.3p.html
     [LibraryImport("libc")]
-    public static unsafe partial int bind(int sockfd, SockAddrIn* addr, uint addrlen);
+    public static unsafe partial int bind(int sockfd, SockAddrIn* addr, socklen_t addrlen);
 
     [LibraryImport("libc", SetLastError = true)]
     // https://www.man7.org/linux/man-pages/man3/getaddrinfo.3.html example on server,client
@@ -40,11 +51,29 @@ public static partial class OS
 
     [LibraryImport("libc")]
     // https://man7.org/linux/man-pages/man3/recv.3p.html
-    public static unsafe partial int recv(int sockfd, void* buffer, uint size, int flags);
+    public static unsafe partial int recv(int sockfd, void* buffer, size_t size, int flags);
+
+    [LibraryImport("libc", SetLastError = true)]
+    // https://man7.org/linux/man-pages/man3/recv.3p.html
+    public static unsafe partial int recvfrom(int sockfd, void* buffer, size_t size, int flags, SockAddr* addr,
+        socklen_t* addrlen);
 
     [LibraryImport("libc", SetLastError = true)]
     public static unsafe partial long write(int fd, void* buffer, uint size);
 
+    [LibraryImport("libc", SetLastError = true)]
+    public static unsafe partial long sendto(int socket, void* message, nint length, int flags, SockAddr* dest_addr,
+        uint dest_len);
+
+    // [LibraryImport("libc", SetLastError = true)]
+    [LibraryImport("libc", SetLastError = true)]
+    public static unsafe partial int fcntl(int filedes, int cmd, int arg);
+
+    [LibraryImport("libc", SetLastError = true)]
+    public static unsafe partial int fcntl(int filedes, int cmd);
+
+    [LibraryImport("libc", SetLastError = true)]
+    public static unsafe partial int ioctl(int filedes, ulong cmd, int* value);
 
     [StructLayout(LayoutKind.Sequential)]
     public unsafe struct SockAddrIn
@@ -81,7 +110,7 @@ public static partial class OS
         public int ai_family;
         public int ai_socktype;
         public int ai_protocol;
-        public uint ai_addrlen;
+        public socklen_t ai_addrlen;
         public char* ai_canonname;
 
         public SockAddr* ai_addr;
