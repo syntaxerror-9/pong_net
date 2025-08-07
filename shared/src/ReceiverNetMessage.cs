@@ -1,13 +1,12 @@
-using shared.Messages;
-
 namespace shared;
 
-public unsafe class ReceiverDelivery(
-    Message message,
+// If you received a net message and you have to ack it back
+public unsafe class ReceiverNetMessage(
+    Messages.Message message,
     OS.SockAddr* targetAddr,
     uint targetAddrLen,
     int socketfd
-) : Delivery(message, targetAddr, targetAddrLen, socketfd)
+) : NetMessage(message, targetAddr, targetAddrLen, socketfd)
 {
     private const long EXPIRE_MILLISECONDS = 1000;
 
@@ -23,9 +22,10 @@ public unsafe class ReceiverDelivery(
         return false;
     }
 
-    public ReceiverDelivery SendAck()
+    public ReceiverNetMessage SendAck()
     {
-        var ackMessage = new shared.Messages.Acknowledgment(message.PacketNumber, message.GetOpcode);
+        Console.WriteLine($"Sending ack for {message.GetOpcode} {message.PacketNumber}");
+        var ackMessage = new Messages.Acknowledgment(message.PacketNumber, message.GetOpcode);
         Net.SendMessage(socketfd, ackMessage, targetAddr, targetAddrLen);
         return this;
     }

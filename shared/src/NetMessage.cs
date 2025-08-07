@@ -3,7 +3,7 @@ using shared.Messages;
 
 namespace shared;
 
-public unsafe class Delivery(
+public unsafe class NetMessage(
     Message message,
     OS.SockAddr* targetAddr,
     uint targetAddrLen,
@@ -17,7 +17,7 @@ public unsafe class Delivery(
     public Message Message => message;
     public OS.SockAddr* TargetAddr => targetAddr;
 
-    public Delivery Send()
+    public NetMessage Send()
     {
         Net.SendMessage(socketfd, message, targetAddr, targetAddrLen);
         return this;

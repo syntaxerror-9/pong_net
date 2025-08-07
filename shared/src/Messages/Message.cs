@@ -36,8 +36,8 @@ public abstract class Message(byte _packetNumber)
                 return new EnemyMovePaddle(bytes[1], paddleY);
             case Echo.Opcode:
                 return new Echo(bytes[1], bytes[2]);
-            case PlayerID.Opcode:
-                return new PlayerID(bytes[1], bytes[2]);
+            case PlayerIndex.Opcode:
+                return new PlayerIndex(bytes[1], bytes[2]);
             case Acknowledgment.Opcode:
                 return new Acknowledgment(bytes[1], bytes[2]);
             default:

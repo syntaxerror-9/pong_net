@@ -1,5 +1,7 @@
 ﻿using System.Runtime.InteropServices;
+using server;
 using shared;
+using Utils = server.Utils;
 
 const int port = 8080;
 const string address = "127.0.0.1";
@@ -34,10 +36,9 @@ unsafe
     // Keeps track of the received packets from client. Sends ack if they send the same packet again.
     var deliveryManager = new DeliveryManager();
 
+    User* users = stackalloc User[2];
+    int userIndex = 0;
 
-    OS.SockAddr* peer_addrs = stackalloc OS.SockAddr[2];
-    uint[] peer_lenghts = new uint[2];
-    int peer_addrs_counter = 0;
     nint size = 500;
     byte* buffer = stackalloc byte[(int)size];
     byte[] packetCounter = new byte[0xFF];
@@ -54,7 +55,7 @@ unsafe
         {
             int errno = Marshal.GetLastPInvokeError();
 
-            // No packets arrived. Keep working.
+            // No packets arrived.
             if (errno == OS.EAGAIN)
             {
                 deliveryManager.Update();
@@ -69,23 +70,31 @@ unsafe
         {
             shared.Messages.Message message = shared.Messages.Message.FromBytes(buffer, bytesReceived);
 
-            int client_id = -1;
+            int clientId = -1;
 
-            for (int i = 0; i < 2; i++)
+            for (int i = 0; i < userIndex; i++)
             {
-                if (Utils.SameByteSeq(peer_addrs[i].sa_data, peer_addr.sa_data, 14)) client_id = i;
+                if (users[i].peer_addr != null &&
+                    shared.Utils.SameByteSeq(users[i].peer_addr->sa_data, peer_addr.sa_data, 14))
+                {
+                    clientId = users[i].clientId;
+                }
             }
+
+
+            User? foundUser = Utils.FindById(users, clientId);
 
             bool isDuplicate = false;
 
 
             if (message.RequiresAck(CallMode.Server))
             {
-                if (client_id != -1)
+                if (clientId != -1 && foundUser != null)
                 {
-                    Console.WriteLine($"Found client {client_id}");
+                    var user = foundUser.Value;
                     // Retrieves an existing packet if it was a duplicate, otherwise it creates it and sends ack.
-                    if (deliveryManager.ContainsReceiver(message.GetOpcode, peer_addrs[client_id].sa_data,
+                    if (deliveryManager.ContainsReceiver(message.GetOpcode,
+                            user.peer_addr->sa_data,
                             message.PacketNumber,
                             out var receiver))
                     {
@@ -94,37 +103,43 @@ unsafe
                     }
                     else
                     {
-                        receiver = new ReceiverDelivery(message, &peer_addrs[client_id], peer_len, socketfd);
+                        receiver = new ReceiverNetMessage(message, user.peer_addr, user.peer_length, socketfd);
                     }
 
                     deliveryManager.AddReceiver(receiver);
                 }
             }
 
-            if (message is shared.Messages.Join && !isDuplicate)
+            if (message is shared.Messages.Join && !isDuplicate && clientId == -1)
             {
                 Console.WriteLine("Join");
-                if (peer_addrs_counter >= 2)
+                if (userIndex >= 2)
                 {
                     throw new Exception("Too many joins. Panic.");
                 }
 
-                peer_addrs[peer_addrs_counter] = peer_addr;
-                peer_lenghts[peer_addrs_counter] = peer_len;
+                // NOTE: This will default to 0 since we stackalloc the struct
+                var lastClientId = users[userIndex].clientId;
+                // TOOD: is it ok to let it overflow?
+                byte userId = (byte)(lastClientId + 1);
+                User user = new User(userId, peer_len, peer_addr);
+                Console.WriteLine($"Last client id {lastClientId} _ {userId} _ {user.clientId}");
 
-                // Edge case
-                var joinRcv = new ReceiverDelivery(message, &peer_addrs[peer_addrs_counter], peer_len, socketfd);
-                deliveryManager.AddReceiver(joinRcv);
+                Console.WriteLine($"Join {userId}");
 
+                var playerIdMessage =
+                    new shared.Messages.PlayerIndex(packetCounter.Use(shared.Messages.PlayerIndex.Opcode),
+                        (byte)userIndex);
+                SenderNetMessage playerIdNetMessage = new SenderNetMessage(playerIdMessage, user.peer_addr,
+                    user.peer_length,
+                    socketfd,
+                    () => { Console.WriteLine($"Player {user.clientId} received the id!"); });
+                Console.WriteLine("Added sender");
 
-                var counter = peer_addrs_counter;
-                SenderDelivery playerIdDelivery = new SenderDelivery(
-                    new shared.Messages.PlayerID(packetCounter.Use(shared.Messages.PlayerID.Opcode),
-                        (byte)peer_addrs_counter), &peer_addrs[peer_addrs_counter], peer_len, socketfd,
-                    () => { Console.WriteLine($"Player {counter} received the id!"); });
+                deliveryManager.AddSender(playerIdNetMessage);
 
-                deliveryManager.AddSender(playerIdDelivery);
-                peer_addrs_counter++;
+                // Store the user and increment the index.
+                users[userIndex++] = user;
             }
             else if (message is shared.Messages.Acknowledgment acknowledgment)
             {
@@ -141,37 +156,51 @@ unsafe
             }
             else if (message is shared.Messages.MovePaddle movePaddle)
             {
-                var enemyMovePaddleMessage =
-                    new shared.Messages.EnemyMovePaddle(packetCounter.Use(shared.Messages.EnemyMovePaddle.Opcode),
-                        movePaddle.PositionY);
+                if (userIndex != 2)
+                {
+                    Console.WriteLine("Both player have not joined. Nothing to do.");
+                }
+                else
+                {
+                    var enemyMovePaddleMessage =
+                        new shared.Messages.EnemyMovePaddle(packetCounter.Use(shared.Messages.EnemyMovePaddle.Opcode),
+                            movePaddle.PositionY);
 
-                new Delivery(enemyMovePaddleMessage, &peer_addrs[(client_id + 1) % 2],
-                    peer_lenghts[(client_id + 1) % 2], socketfd).Send();
+
+                    var otherUser = users[(userIndex + 1) % 2];
+                    SendMessage(enemyMovePaddleMessage, otherUser.clientId);
+                }
+            }
+            else if (message is shared.Messages.Exit)
+            {
+                if (foundUser == null) throw new Exception("Got exit request from invalid user");
+                var user = foundUser.Value;
+                var currentUserIndex = -1;
+                for (int i = 0; i < 2; i++)
+                    if (users[userIndex].clientId == user.clientId)
+                        currentUserIndex = i;
+
+                // If its at the start of the array, copy the data of the second user to the start of the array
+                if (currentUserIndex == 0)
+                {
+                    NativeMemory.Copy(&users[1], &users[0], (uint)sizeof(OS.SockAddr));
+                }
+
+                deliveryManager.DeleteUserRequests(user.peer_addr);
+
+
+                userIndex = 1;
             }
         }
     }
 
     void SendMessage(shared.Messages.Message message, int client)
     {
-        Net.SendMessage(socketfd, message, &peer_addrs[client], peer_lenghts[client]);
+        var foundUser = Utils.FindById(users, client);
+        if (foundUser == null) throw new Exception("SendMessage called with invalid id!");
+        var user = foundUser.Value;
+
+
+        Net.SendMessage(socketfd, message, user.peer_addr, user.peer_length);
     }
 }
-
-// if (OS.sendto(socket, buffer, (uint)packet_size, 0, &peer_addr, peer_len) == -1)
-// {
-//     Console.WriteLine($"Failed send {Marshal.GetLastPInvokeErrorMessage()}");
-//     return;
-// }
-//
-// Console.WriteLine($"Finished receiving - {packet_size}");
-// for (int i = 0; i < packet_size; i++)
-// {
-//     Console.Write((char)buffer[i]);
-// }
-// }
-
-
-// if (OS.close(socket) == -1)
-// {
-//     Console.WriteLine("Closing socket failed.");
-// }

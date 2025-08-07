@@ -2,26 +2,27 @@ namespace shared;
 
 public class DeliveryManager
 {
-    public HashSet<SenderDelivery> senderDeliveries { get; private set; } = new();
-    public HashSet<ReceiverDelivery> receiverDeliveries { get; private set; } = new();
+    public HashSet<SenderNetMessage> senderDeliveries { get; private set; } = new();
+    public HashSet<ReceiverNetMessage> receiverDeliveries { get; private set; } = new();
 
-    private List<ReceiverDelivery> deleteDeliveries = new();
+    private List<ReceiverNetMessage> deleteReceiverDeliveries = new();
 
 
     public void Update()
     {
-        deleteDeliveries.Clear();
+        // Console.WriteLine("Delivery update");
+        deleteReceiverDeliveries.Clear();
 
         foreach (var receiverDelivery in receiverDeliveries)
             if (receiverDelivery.Expired())
-                deleteDeliveries.Add(receiverDelivery);
+                deleteReceiverDeliveries.Add(receiverDelivery);
 
-        foreach (var deleteDelivery in deleteDeliveries) receiverDeliveries.Remove(deleteDelivery);
+        foreach (var deleteDelivery in deleteReceiverDeliveries) receiverDeliveries.Remove(deleteDelivery);
 
         foreach (var senderDelivery in senderDeliveries) senderDelivery.Tick();
     }
 
-    public bool ContainsSender(byte ackOpcode, byte ackPacketNumber, out SenderDelivery senderDelivery)
+    public bool ContainsSender(byte ackOpcode, byte ackPacketNumber, out SenderNetMessage senderDelivery)
     {
         try
         {
@@ -36,7 +37,7 @@ public class DeliveryManager
         }
     }
 
-    public unsafe bool ContainsReceiver(byte opCode, byte* saData, byte packetNumber, out ReceiverDelivery delivery)
+    public unsafe bool ContainsReceiver(byte opCode, byte* saData, byte packetNumber, out ReceiverNetMessage delivery)
     {
         try
         {
@@ -54,22 +55,46 @@ public class DeliveryManager
         }
     }
 
-    public void RemoveSender(SenderDelivery senderDelivery)
+    public void RemoveSender(SenderNetMessage senderDelivery)
     {
         senderDeliveries.Remove(senderDelivery);
     }
 
     // Adds to the HashMap and sends a message
-    public void AddSender(SenderDelivery senderDelivery)
+    public void AddSender(SenderNetMessage senderDelivery)
     {
         senderDelivery.SendMessage();
         senderDeliveries.Add(senderDelivery);
     }
 
     // Adds to the HashMap and sends a ack
-    public void AddReceiver(ReceiverDelivery receiverDelivery)
+    public void AddReceiver(ReceiverNetMessage receiverDelivery)
     {
         receiverDelivery.SendAck();
         receiverDeliveries.Add(receiverDelivery);
+    }
+
+    public unsafe void DeleteUserRequests(OS.SockAddr* sockAddr)
+    {
+        List<SenderNetMessage> deleteSenders = new();
+        foreach (var senderDelivery in senderDeliveries)
+        {
+            if (Utils.SameByteSeq(senderDelivery.TargetAddr->sa_data, sockAddr->sa_data, 14))
+            {
+                deleteSenders.Add(senderDelivery);
+            }
+        }
+
+        foreach (var msg in deleteSenders) senderDeliveries.Remove(msg);
+
+        foreach (var receiverDelivery in receiverDeliveries)
+        {
+            if (Utils.SameByteSeq(receiverDelivery.TargetAddr->sa_data, sockAddr->sa_data, 14))
+            {
+                deleteReceiverDeliveries.Add(receiverDelivery);
+            }
+        }
+
+        foreach (var msg in deleteReceiverDeliveries) receiverDeliveries.Remove(msg);
     }
 }

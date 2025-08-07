@@ -2,12 +2,13 @@ using shared.Messages;
 
 namespace shared;
 
-public unsafe class SenderDelivery(
+// If you're sending a net message and need a ack back
+public unsafe class SenderNetMessage(
     Message message,
     OS.SockAddr* targetAddr,
     uint targetAddrLen,
     int socketfd,
-    Action _cb) : Delivery(message, targetAddr, targetAddrLen, socketfd)
+    Action _cb) : NetMessage(message, targetAddr, targetAddrLen, socketfd)
 {
     public Action cb => _cb;
 
@@ -24,7 +25,7 @@ public unsafe class SenderDelivery(
         }
     }
 
-    public SenderDelivery SendMessage()
+    public SenderNetMessage SendMessage()
     {
         Net.SendMessage(socketfd, message, targetAddr, targetAddrLen);
         return this;

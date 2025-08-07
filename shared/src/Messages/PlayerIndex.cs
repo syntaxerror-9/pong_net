@@ -1,16 +1,15 @@
 namespace shared.Messages;
 
-public class PlayerID(byte packetNumber, byte playerId) : Message(packetNumber)
+public class PlayerIndex(byte packetNumber, byte index) : Message(packetNumber)
 {
-    private byte playerId = playerId;
-    public byte PlayerId => playerId;
+    public byte Index { get; } = index;
 
     public override byte[] ToBytes()
     {
         var r = new byte[3];
         r[0] = Opcode;
         r[1] = packetNumber;
-        r[2] = playerId;
+        r[2] = Index;
         return r;
     }
 

@@ -6,7 +6,14 @@ run-client:
 	export RAYLIB_BUILD_PATH=$(RAYLIB_BUILD_PATH) && \
 	dotnet run --project client
 
-run-server: 
+run-client2:
+	export RAYLIB_BUILD_PATH=$(RAYLIB_BUILD_PATH) && \
+	dotnet run --project client & \
+	export RAYLIB_BUILD_PATH=$(RAYLIB_BUILD_PATH) && \
+	sleep 1 && \
+	dotnet run --project client
+
+run-server:
 	dotnet run --project server
 
 build-raylib:

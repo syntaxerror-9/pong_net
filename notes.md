@@ -16,7 +16,7 @@ Communication protocol Client:
 | 0x04   | Update score    | Server        | P1: uint,P2: uint                                                 | yes |
 | 0x05   | EnemyMovePaddle | Server        | Enemy paddle position: int                                        | no  |
 | 0x06   | Echo            | Server        | Echos the last opcode that was sent by client: byte               | yes |
-| 0x07   | PlayerID        | Server        | Sends the player id: byte[0,1]                                    | yes |
+| 0x07   | PlayerIndex     | Server        | Sends the player Index: byte[0,1]                                 | yes |
 | 0x08   | MatchEnd        | Server        | Sends the player the result of the match: byte[0,1]-0=loose,1=win | yes |
 | 0xFF   | Ack             | Client/Server | Sends an acknowledgment with the last opcode                      | no  |
 

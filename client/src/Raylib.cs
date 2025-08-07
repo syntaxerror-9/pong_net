@@ -23,7 +23,7 @@ static partial class Raylib
     [LibraryImport("libraylib.dylib")]
     public static partial void InitWindow(int width, int height, [MarshalAs(UnmanagedType.LPStr)] string name);
 
-    [LibraryImport("libraylib.dylib")]
+    [LibraryImport("libraylib.dylib", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool WindowShouldClose();
 
