@@ -12,7 +12,7 @@ Communication protocol Client:
 | 0x00   | Joining         | Client        | 0                                                                 | yes |
 | 0x01   | Exit            | Client        | 0                                                                 | yes |
 | 0x02   | Move Paddle     | Client        | PaddleY: int                                                      | no  |
-| 0x03   | Ball state      | Server        | Vector: float3                                                    | no  |  
+| 0x03   | Ball state      | Server        | Direction&Speed: float2, Position: float2, Timestamp: long        | no  |  
 | 0x04   | Update score    | Server        | P1: uint,P2: uint                                                 | yes |
 | 0x05   | EnemyMovePaddle | Server        | Enemy paddle position: int                                        | no  |
 | 0x06   | Echo            | Server        | Echos the last opcode that was sent by client: byte               | yes |

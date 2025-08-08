@@ -112,7 +112,7 @@ internal class Client
         {
             SenderNetMessage joinNetMessage =
                 new SenderNetMessage(joinMessage, serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd,
-                    () => { Console.WriteLine("Sender delivery!"); });
+                    () => { Console.WriteLine("Join message completed."); });
 
             var deliveryManager = new DeliveryManager();
             deliveryManager.AddSender(joinNetMessage);
@@ -236,8 +236,11 @@ internal class Client
         Raylib.BeginDrawing();
         Raylib.ClearBackground(new Raylib.Color { r = 0x18, g = 0x18, b = 0x18, a = 0xFF });
 
-        Raylib.DrawRectangle(playerIndex * WINDOW_W, paddleY, 100, 300, new Raylib.Color { r = 0xFF, a = 0xFF });
-        Raylib.DrawRectangle(((playerIndex + 1) % 2) * WINDOW_W, enemyPaddleY, 100, 300,
+        var enemyPlayerIndex = (playerIndex + 1) % 2;
+
+        Raylib.DrawRectangle((playerIndex * WINDOW_W) - 100 * playerIndex, paddleY, 100, 300,
+            new Raylib.Color { r = 0x11, a = 0xFF });
+        Raylib.DrawRectangle(enemyPlayerIndex * WINDOW_W - 100 * enemyPlayerIndex, enemyPaddleY, 100, 300,
             new Raylib.Color { r = 0xFF, a = 0xFF });
         Thread.Sleep(50);
         Raylib.EndDrawing();

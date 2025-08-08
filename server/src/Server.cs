@@ -37,7 +37,7 @@ unsafe
     var deliveryManager = new DeliveryManager();
 
     User* users = stackalloc User[2];
-    int userIndex = 0;
+    bool[] joinedUsers = new bool[2];
 
     nint size = 500;
     byte* buffer = stackalloc byte[(int)size];
@@ -70,19 +70,31 @@ unsafe
         {
             shared.Messages.Message message = shared.Messages.Message.FromBytes(buffer, bytesReceived);
 
-            int clientId = -1;
 
-            for (int i = 0; i < userIndex; i++)
+            int clientId = -1, userIndex = -1;
+
+            for (int i = 0; i < 2; i++)
             {
-                if (users[i].peer_addr != null &&
+                if (joinedUsers[i] &&
+                    users[i].peer_addr != null &&
                     shared.Utils.SameByteSeq(users[i].peer_addr->sa_data, peer_addr.sa_data, 14))
                 {
+                    Console.WriteLine($"Found match for index {i}");
                     clientId = users[i].clientId;
+                    userIndex = i;
                 }
             }
 
 
             User? foundUser = Utils.FindById(users, clientId);
+
+            peer_addr.Print();
+
+
+            if (foundUser != null)
+            {
+                Console.WriteLine($"Received message from {foundUser.Value.clientId}");
+            }
 
             bool isDuplicate = false;
 
@@ -112,19 +124,23 @@ unsafe
 
             if (message is shared.Messages.Join && !isDuplicate && clientId == -1)
             {
-                Console.WriteLine("Join");
-                if (userIndex >= 2)
+                if (joinedUsers[0] && joinedUsers[1])
                 {
                     throw new Exception("Too many joins. Panic.");
                 }
 
-                // NOTE: This will default to 0 since we stackalloc the struct
-                var lastClientId = users[userIndex].clientId;
-                // TOOD: is it ok to let it overflow?
-                byte userId = (byte)(lastClientId + 1);
-                User user = new User(userId, peer_len, peer_addr);
-                Console.WriteLine($"Last client id {lastClientId} _ {userId} _ {user.clientId}");
+                int lastUserIndex = -1;
+                for (int i = 0; i < 2; i++)
+                    if (joinedUsers[i])
+                        lastUserIndex = i;
 
+                byte userId = (byte)(1 + (lastUserIndex == -1 ? 0 : users[lastUserIndex].clientId));
+                User user = new User(userId, peer_len, peer_addr);
+                // If lastUserIndex = -1, it will be 0, if lastUserIndex = 0, it will be 1; if lastUserIndex = 1, it will be 0;
+                userIndex = (lastUserIndex + 1) % 2;
+                users[userIndex] = user;
+                joinedUsers[userIndex] = true;
+                Console.WriteLine($"Last client id {userId} _ {user.clientId}");
                 Console.WriteLine($"Join {userId}");
 
                 var playerIdMessage =
@@ -139,7 +155,6 @@ unsafe
                 deliveryManager.AddSender(playerIdNetMessage);
 
                 // Store the user and increment the index.
-                users[userIndex++] = user;
             }
             else if (message is shared.Messages.Acknowledgment acknowledgment)
             {
@@ -156,7 +171,8 @@ unsafe
             }
             else if (message is shared.Messages.MovePaddle movePaddle)
             {
-                if (userIndex != 2)
+                // Same as !joinedUsers[0] || !joinedUsers[1]
+                if (!(joinedUsers[0] && joinedUsers[1]))
                 {
                     Console.WriteLine("Both player have not joined. Nothing to do.");
                 }
@@ -166,36 +182,32 @@ unsafe
                         new shared.Messages.EnemyMovePaddle(packetCounter.Use(shared.Messages.EnemyMovePaddle.Opcode),
                             movePaddle.PositionY);
 
+                    if (foundUser == null) throw new Exception("Did not find an user who sent the move message");
+                    var user = foundUser.Value;
+                    User otherUser = users[0];
 
-                    var otherUser = users[(userIndex + 1) % 2];
+                    for (int i = 0; i < 2; i++)
+                        if (users[i].clientId != user.clientId)
+                            otherUser = users[i];
+
+
                     SendMessage(enemyMovePaddleMessage, otherUser.clientId);
                 }
             }
             else if (message is shared.Messages.Exit)
             {
-                if (foundUser == null) throw new Exception("Got exit request from invalid user");
+                if (foundUser == null || userIndex == -1) throw new Exception("Got exit request from invalid user");
                 var user = foundUser.Value;
-                var currentUserIndex = -1;
-                for (int i = 0; i < 2; i++)
-                    if (users[userIndex].clientId == user.clientId)
-                        currentUserIndex = i;
-
-                // If its at the start of the array, copy the data of the second user to the start of the array
-                if (currentUserIndex == 0)
-                {
-                    NativeMemory.Copy(&users[1], &users[0], (uint)sizeof(OS.SockAddr));
-                }
-
+                joinedUsers[userIndex] = false;
                 deliveryManager.DeleteUserRequests(user.peer_addr);
 
-
-                userIndex = 1;
             }
         }
     }
 
     void SendMessage(shared.Messages.Message message, int client)
     {
+        Console.WriteLine($"Sending message to {client}");
         var foundUser = Utils.FindById(users, client);
         if (foundUser == null) throw new Exception("SendMessage called with invalid id!");
         var user = foundUser.Value;

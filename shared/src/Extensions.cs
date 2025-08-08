@@ -7,4 +7,11 @@ public static class Extensions
     {
         return packetCounter[index]++;
     }
+
+    public static unsafe void Print(this OS.SockAddr addr)
+    {
+        Console.Write($"len:{addr.sa_len} fam:{addr.sa_family_t} b:");
+        for (int i = 0; i < 14; i++) Console.Write($"{addr.sa_data[i]},");
+        Console.WriteLine();
+    }
 }
