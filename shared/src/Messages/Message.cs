@@ -1,3 +1,5 @@
+using shared.GameObjects;
+
 namespace shared.Messages;
 
 public abstract class Message(byte _packetNumber)
@@ -19,20 +21,27 @@ public abstract class Message(byte _packetNumber)
             case Exit.Opcode:
                 return new Exit(bytes[1]);
             case MovePaddle.Opcode:
-                int paddleY = 0;
-                for (int i = 0; i < sizeof(int); i++)
-                {
-                    paddleY |= (bytes[2 + i] & 0xFF) << ((sizeof(int) - 1 - i) * 8);
-                }
-
+                int paddleY = Utils.Unpack<int>(&bytes[2], sizeof(int));
                 return new MovePaddle(bytes[1], paddleY);
-            case EnemyMovePaddle.Opcode:
-                paddleY = 0;
-                for (int i = 0; i < sizeof(int); i++)
-                {
-                    paddleY |= (bytes[2 + i] & 0xFF) << ((sizeof(int) - 1 - i) * 8);
-                }
 
+            case BallState.Opcode:
+                int offset = 2;
+                float positionX = Utils.Unpack<float>(&bytes[offset], sizeof(float));
+                offset += sizeof(float);
+                float positionY = Utils.Unpack<float>(&bytes[offset], sizeof(float));
+                offset += sizeof(float);
+                float velocityX = Utils.Unpack<float>(&bytes[offset], sizeof(float));
+                offset += sizeof(float);
+                float velocityY = Utils.Unpack<float>(&bytes[offset], sizeof(float));
+                offset += sizeof(float);
+                long timeStamp = Utils.Unpack<long>(&bytes[offset], sizeof(long));
+                return new BallState(bytes[1],
+                    new Ball
+                    {
+                        PositionX = positionX, PositionY = positionY, VelocityX = velocityX, VelocityY = velocityY
+                    }, timeStamp);
+            case EnemyMovePaddle.Opcode:
+                paddleY = Utils.Unpack<int>(&bytes[2], sizeof(int));
                 return new EnemyMovePaddle(bytes[1], paddleY);
             case Echo.Opcode:
                 return new Echo(bytes[1], bytes[2]);

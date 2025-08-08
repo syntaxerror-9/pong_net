@@ -2,6 +2,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using shared;
+using shared.GameObjects;
 
 namespace Client;
 
@@ -10,18 +11,6 @@ internal class Client
     private static int socketfd;
     private static unsafe OS.AddrInfo* serverAddr;
 
-
-    private Paddle paddle = new();
-    private Paddle enemyPaddle = new();
-
-
-    public static void SendMessage(shared.Messages.Message msg)
-    {
-        unsafe
-        {
-            Net.SendMessage(socketfd, msg, serverAddr->ai_addr, serverAddr->ai_addrlen);
-        }
-    }
 
     public static void Shutdown()
     {
@@ -36,17 +25,6 @@ internal class Client
         Environment.Exit(0);
     }
 
-    public static unsafe void HandleCloseGame(DeliveryManager deliveryManager, ref byte[] packetCounter)
-    {
-        // if (Raylib.WindowShouldClose())
-        // {
-        //     Console.WriteLine("Hallo!");
-        //     var exitPacket = new shared.Messages.Exit(packetCounter.Use(shared.Messages.Exit.Opcode));
-        //     var senderMessage = new SenderNetMessage(exitPacket, serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd,
-        //         Shutdown);
-        //     deliveryManager.AddSender(senderMessage);
-        // }
-    }
 
     public static unsafe void CreateConnection()
     {
@@ -96,6 +74,7 @@ internal class Client
     private static int playerIndex = -1;
     private static int paddleY = 300, enemyPaddleY = 300;
     private const int WINDOW_W = 900, WINDOW_H = 600;
+    private static Ball ball = new();
 
     public static void Main()
     {
@@ -119,10 +98,14 @@ internal class Client
             const int size = 500;
             byte* buffer = stackalloc byte[size];
             long requestedClose = -1;
+            bool forceQuit = false;
 
+            OS.SockAddr peerAddr = new();
+            uint peerLen = (uint)sizeof(OS.SockAddr);
 
             // Two cases this loop stops: it timed out (1s) or the client received the server's ack of exiting
-            while (requestedClose == -1 || DateTimeOffset.Now.ToUnixTimeMilliseconds() - requestedClose < 1000)
+            while (!forceQuit && (requestedClose == -1 ||
+                                  DateTimeOffset.Now.ToUnixTimeMilliseconds() - requestedClose < 1000))
             {
                 if (Raylib.WindowShouldClose() && requestedClose == -1)
                 {
@@ -134,97 +117,105 @@ internal class Client
                     requestedClose = DateTimeOffset.Now.ToUnixTimeMilliseconds();
                 }
 
-                OS.SockAddr peerAddr = new();
-                uint peerLen = (uint)sizeof(OS.SockAddr);
+
+                deliveryManager.Update();
+
+                if (Raylib.IsKeyDown(Raylib.KEY_J))
+                {
+                    int d = 5;
+                    paddleY -= d;
+                    new NetMessage(
+                        new shared.Messages.MovePaddle(packetCounter.Use(shared.Messages.MovePaddle.Opcode),
+                            paddleY), serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd).Send();
+                }
+
+                if (Raylib.IsKeyDown(Raylib.KEY_K))
+                {
+                    int d = 5;
+                    paddleY += d;
+                    new NetMessage(
+                        new shared.Messages.MovePaddle(packetCounter.Use(shared.Messages.MovePaddle.Opcode),
+                            paddleY), serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd).Send();
+                }
+
                 int bytesReceived = OS.recvfrom(socketfd, buffer, size, 0, &peerAddr, &peerLen);
+
+                while (bytesReceived > 0)
+                {
+                    shared.Messages.Message message = shared.Messages.Message.FromBytes(buffer, bytesReceived);
+                    ProcessMessage(message);
+                    bytesReceived = OS.recvfrom(socketfd, buffer, size, 0, &peerAddr, &peerLen);
+                }
 
                 if (bytesReceived == -1)
                 {
                     int errno = Marshal.GetLastPInvokeError();
                     // No packets arrived. Do some other work.
-                    if (errno == OS.EAGAIN)
-                    {
-                        deliveryManager.Update();
-
-                        if (Raylib.IsKeyDown(Raylib.KEY_J))
-                        {
-                            int d = 5;
-                            paddleY -= d;
-                            new NetMessage(
-                                new shared.Messages.MovePaddle(packetCounter.Use(shared.Messages.MovePaddle.Opcode),
-                                    paddleY), serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd).Send();
-                        }
-
-                        if (Raylib.IsKeyDown(Raylib.KEY_K))
-                        {
-                            int d = 5;
-                            paddleY += d;
-                            new NetMessage(
-                                new shared.Messages.MovePaddle(packetCounter.Use(shared.Messages.MovePaddle.Opcode),
-                                    paddleY), serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd).Send();
-                        }
-                    }
-                    else
+                    if (errno != OS.EAGAIN)
                     {
                         throw new Exception($"recvfrom failed: {Marshal.GetLastPInvokeErrorMessage()}");
                     }
                 }
-                else
-                {
-                    var message = shared.Messages.Message.FromBytes(buffer, bytesReceived);
-
-                    bool isDuplicate = false;
-
-                    if (message.RequiresAck(CallMode.Client))
-                    {
-                        if (deliveryManager.ContainsReceiver(message.GetOpcode, serverAddr->ai_addr->sa_data,
-                                message.PacketNumber, out var receiver))
-                        {
-                            isDuplicate = true;
-                        }
-                        else
-                        {
-                            receiver = new ReceiverNetMessage(message, serverAddr->ai_addr, serverAddr->ai_addrlen,
-                                socketfd);
-                        }
-
-                        deliveryManager.AddReceiver(receiver);
-                    }
-
-
-                    if (message is shared.Messages.Acknowledgment acknowledgment)
-                    {
-                        if (deliveryManager.ContainsSender(acknowledgment.GetAckOpcode, acknowledgment.PacketNumber,
-                                out var senderDelivery))
-                        {
-                            deliveryManager.RemoveSender(senderDelivery);
-                            senderDelivery.cb();
-                            if (acknowledgment.GetAckOpcode == shared.Messages.Exit.Opcode)
-                            {
-                                Console.WriteLine("Server received exit request.");
-                                break;
-                            }
-                        }
-                        else
-                        {
-                            Console.WriteLine("Received an acknowledgment for an unknown packet. Investigate.");
-                        }
-                    }
-                    else if (message is shared.Messages.PlayerIndex playerIdMessage)
-                    {
-                        playerIndex = playerIdMessage.Index;
-                        Console.WriteLine($"I'm player {playerIndex}");
-                    }
-                    else if (message is shared.Messages.EnemyMovePaddle enemyMovePaddle)
-                    {
-                        enemyPaddleY = enemyMovePaddle.PositionY;
-                    }
-
-
-                    Console.WriteLine($"Received message: {message.GetType().Name}");
-                }
 
                 Render();
+            }
+
+
+            void ProcessMessage(shared.Messages.Message message)
+            {
+                bool isDuplicate = false;
+
+                if (message.RequiresAck(CallMode.Client))
+                {
+                    if (deliveryManager.ContainsReceiver(message.GetOpcode, serverAddr->ai_addr->sa_data,
+                            message.PacketNumber, out var receiver))
+                    {
+                        isDuplicate = true;
+                    }
+                    else
+                    {
+                        receiver = new ReceiverNetMessage(message, serverAddr->ai_addr, serverAddr->ai_addrlen,
+                            socketfd);
+                    }
+
+                    deliveryManager.AddReceiver(receiver);
+                }
+
+
+                if (message is shared.Messages.Acknowledgment acknowledgment)
+                {
+                    if (deliveryManager.ContainsSender(acknowledgment.GetAckOpcode, acknowledgment.PacketNumber,
+                            out var senderDelivery))
+                    {
+                        deliveryManager.RemoveSender(senderDelivery);
+                        senderDelivery.cb();
+                        if (acknowledgment.GetAckOpcode == shared.Messages.Exit.Opcode)
+                        {
+                            Console.WriteLine("Server received exit request.");
+                            forceQuit = true;
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("Received an acknowledgment for an unknown packet. Investigate.");
+                    }
+                }
+                else if (message is shared.Messages.PlayerIndex playerIdMessage)
+                {
+                    playerIndex = playerIdMessage.Index;
+                    Console.WriteLine($"I'm player {playerIndex}");
+                }
+                else if (message is shared.Messages.EnemyMovePaddle enemyMovePaddle)
+                {
+                    enemyPaddleY = enemyMovePaddle.PositionY;
+                }
+                else if (message is shared.Messages.BallState ballState)
+                {
+                    ball = ballState.Ball;
+                }
+
+
+                Console.WriteLine($"Received message: {message.GetType().Name}");
             }
 
             Shutdown();
@@ -242,6 +233,7 @@ internal class Client
             new Raylib.Color { r = 0x11, a = 0xFF });
         Raylib.DrawRectangle(enemyPlayerIndex * WINDOW_W - 100 * enemyPlayerIndex, enemyPaddleY, 100, 300,
             new Raylib.Color { r = 0xFF, a = 0xFF });
+        Raylib.DrawRectangle((int)ball.PositionX, (int)ball.PositionY, 10, 10, new Raylib.Color { g = 0xFF, a = 0xFF });
         Thread.Sleep(50);
         Raylib.EndDrawing();
     }

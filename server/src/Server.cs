@@ -1,7 +1,13 @@
 ﻿using System.Runtime.InteropServices;
 using server;
 using shared;
+using shared.GameObjects;
 using Utils = server.Utils;
+
+
+// How many times the server sends update about events (ball position, matchend etc.) per second
+const int TPS = 60;
+const long TPMS = 1000 / 60;
 
 const int port = 8080;
 const string address = "127.0.0.1";
@@ -22,7 +28,6 @@ unsafe
         throw new Exception($"Ioctl failed. {Marshal.GetLastPInvokeErrorMessage()}");
     }
 
-
     OS.SockAddrIn socket_addr = new();
     socket_addr.sin_family = (ushort)OS.AF_INET;
     socket_addr.in_port_t = OS.htons(port);
@@ -36,6 +41,8 @@ unsafe
     // Keeps track of the received packets from client. Sends ack if they send the same packet again.
     var deliveryManager = new DeliveryManager();
 
+    var ball = new Ball();
+
     User* users = stackalloc User[2];
     bool[] joinedUsers = new bool[2];
 
@@ -43,165 +50,191 @@ unsafe
     byte* buffer = stackalloc byte[(int)size];
     byte[] packetCounter = new byte[0xFF];
     bool isClient = false;
+    long lastTick = DateTimeOffset.Now.ToUnixTimeMilliseconds();
 
     while (true)
     {
+        if (DateTimeOffset.Now.ToUnixTimeMilliseconds() - lastTick < TPMS)
+        {
+            Thread.Sleep(10);
+            continue;
+        }
+
+        lastTick = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+
         OS.SockAddr peer_addr = new();
         uint peer_len = (uint)sizeof(OS.SockAddr);
         int flags = 0;
+
+        deliveryManager.Update();
+        UpdateBallState();
         int bytesReceived = OS.recvfrom(socketfd, buffer, size, flags, &peer_addr, &peer_len);
+
+        while (bytesReceived > 0)
+        {
+            shared.Messages.Message message = shared.Messages.Message.FromBytes(buffer, bytesReceived);
+            ProcessMessage(message, peer_addr, peer_len);
+            bytesReceived = OS.recvfrom(socketfd, buffer, size, flags, &peer_addr, &peer_len);
+        }
 
         if (bytesReceived == -1)
         {
             int errno = Marshal.GetLastPInvokeError();
-
-            // No packets arrived.
-            if (errno == OS.EAGAIN)
-            {
-                deliveryManager.Update();
-                System.Threading.Thread.Sleep(10); // Avoid busy looping
-            }
-            else
+            if (errno != OS.EAGAIN)
             {
                 throw new Exception($"recvfrom failed: {Marshal.GetLastPInvokeErrorMessage()}");
             }
         }
-        else
+    }
+
+    void ProcessMessage(shared.Messages.Message message, OS.SockAddr peer_addr, uint peer_len)
+    {
+        int clientId = -1, userIndex = -1;
+        for (int i = 0; i < 2; i++)
         {
-            shared.Messages.Message message = shared.Messages.Message.FromBytes(buffer, bytesReceived);
-
-
-            int clientId = -1, userIndex = -1;
-
-            for (int i = 0; i < 2; i++)
+            if (joinedUsers[i] &&
+                users[i].peer_addr != null &&
+                shared.Utils.SameByteSeq(users[i].peer_addr->sa_data, peer_addr.sa_data, 14))
             {
-                if (joinedUsers[i] &&
-                    users[i].peer_addr != null &&
-                    shared.Utils.SameByteSeq(users[i].peer_addr->sa_data, peer_addr.sa_data, 14))
-                {
-                    Console.WriteLine($"Found match for index {i}");
-                    clientId = users[i].clientId;
-                    userIndex = i;
-                }
+                Console.WriteLine($"Found match for index {i}");
+                clientId = users[i].clientId;
+                userIndex = i;
             }
+        }
 
 
-            User? foundUser = Utils.FindById(users, clientId);
+        User? foundUser = Utils.FindById(users, clientId);
 
-            peer_addr.Print();
+        peer_addr.Print();
+
+        if (foundUser != null)
+        {
+            Console.WriteLine($"Received message from {foundUser.Value.clientId}");
+        }
+
+        bool isDuplicate = false;
 
 
-            if (foundUser != null)
+        if (message.RequiresAck(CallMode.Server))
+        {
+            if (clientId != -1 && foundUser != null)
             {
-                Console.WriteLine($"Received message from {foundUser.Value.clientId}");
-            }
-
-            bool isDuplicate = false;
-
-
-            if (message.RequiresAck(CallMode.Server))
-            {
-                if (clientId != -1 && foundUser != null)
-                {
-                    var user = foundUser.Value;
-                    // Retrieves an existing packet if it was a duplicate, otherwise it creates it and sends ack.
-                    if (deliveryManager.ContainsReceiver(message.GetOpcode,
-                            user.peer_addr->sa_data,
-                            message.PacketNumber,
-                            out var receiver))
-                    {
-                        Console.WriteLine("Was duplicate");
-                        isDuplicate = true;
-                    }
-                    else
-                    {
-                        receiver = new ReceiverNetMessage(message, user.peer_addr, user.peer_length, socketfd);
-                    }
-
-                    deliveryManager.AddReceiver(receiver);
-                }
-            }
-
-            if (message is shared.Messages.Join && !isDuplicate && clientId == -1)
-            {
-                if (joinedUsers[0] && joinedUsers[1])
-                {
-                    throw new Exception("Too many joins. Panic.");
-                }
-
-                int lastUserIndex = -1;
-                for (int i = 0; i < 2; i++)
-                    if (joinedUsers[i])
-                        lastUserIndex = i;
-
-                byte userId = (byte)(1 + (lastUserIndex == -1 ? 0 : users[lastUserIndex].clientId));
-                User user = new User(userId, peer_len, peer_addr);
-                // If lastUserIndex = -1, it will be 0, if lastUserIndex = 0, it will be 1; if lastUserIndex = 1, it will be 0;
-                userIndex = (lastUserIndex + 1) % 2;
-                users[userIndex] = user;
-                joinedUsers[userIndex] = true;
-                Console.WriteLine($"Last client id {userId} _ {user.clientId}");
-                Console.WriteLine($"Join {userId}");
-
-                var playerIdMessage =
-                    new shared.Messages.PlayerIndex(packetCounter.Use(shared.Messages.PlayerIndex.Opcode),
-                        (byte)userIndex);
-                SenderNetMessage playerIdNetMessage = new SenderNetMessage(playerIdMessage, user.peer_addr,
-                    user.peer_length,
-                    socketfd,
-                    () => { Console.WriteLine($"Player {user.clientId} received the id!"); });
-                Console.WriteLine("Added sender");
-
-                deliveryManager.AddSender(playerIdNetMessage);
-
-                // Store the user and increment the index.
-            }
-            else if (message is shared.Messages.Acknowledgment acknowledgment)
-            {
-                if (deliveryManager.ContainsSender(acknowledgment.GetAckOpcode, acknowledgment.PacketNumber,
-                        out var senderDelivery))
-                {
-                    deliveryManager.RemoveSender(senderDelivery);
-                    senderDelivery.cb();
-                }
-                else
-                {
-                    Console.WriteLine("Received an acknowledgment for an unknown packet. Investigate.");
-                }
-            }
-            else if (message is shared.Messages.MovePaddle movePaddle)
-            {
-                // Same as !joinedUsers[0] || !joinedUsers[1]
-                if (!(joinedUsers[0] && joinedUsers[1]))
-                {
-                    Console.WriteLine("Both player have not joined. Nothing to do.");
-                }
-                else
-                {
-                    var enemyMovePaddleMessage =
-                        new shared.Messages.EnemyMovePaddle(packetCounter.Use(shared.Messages.EnemyMovePaddle.Opcode),
-                            movePaddle.PositionY);
-
-                    if (foundUser == null) throw new Exception("Did not find an user who sent the move message");
-                    var user = foundUser.Value;
-                    User otherUser = users[0];
-
-                    for (int i = 0; i < 2; i++)
-                        if (users[i].clientId != user.clientId)
-                            otherUser = users[i];
-
-
-                    SendMessage(enemyMovePaddleMessage, otherUser.clientId);
-                }
-            }
-            else if (message is shared.Messages.Exit)
-            {
-                if (foundUser == null || userIndex == -1) throw new Exception("Got exit request from invalid user");
                 var user = foundUser.Value;
-                joinedUsers[userIndex] = false;
-                deliveryManager.DeleteUserRequests(user.peer_addr);
+                // Retrieves an existing packet if it was a duplicate, otherwise it creates it and sends ack.
+                if (deliveryManager.ContainsReceiver(message.GetOpcode,
+                        user.peer_addr->sa_data,
+                        message.PacketNumber,
+                        out var receiver))
+                {
+                    Console.WriteLine("Was duplicate");
+                    isDuplicate = true;
+                }
+                else
+                {
+                    receiver = new ReceiverNetMessage(message, user.peer_addr, user.peer_length, socketfd);
+                }
 
+                deliveryManager.AddReceiver(receiver);
             }
+        }
+
+        if (message is shared.Messages.Join && !isDuplicate && clientId == -1)
+        {
+            if (joinedUsers[0] && joinedUsers[1])
+            {
+                throw new Exception("Too many joins. Panic.");
+            }
+
+            int lastUserIndex = -1;
+            for (int i = 0; i < 2; i++)
+                if (joinedUsers[i])
+                    lastUserIndex = i;
+
+            byte userId = (byte)(1 + (lastUserIndex == -1 ? 0 : users[lastUserIndex].clientId));
+            User user = new User(userId, peer_len, peer_addr);
+            // If lastUserIndex = -1, it will be 0, if lastUserIndex = 0, it will be 1; if lastUserIndex = 1, it will be 0;
+            userIndex = (lastUserIndex + 1) % 2;
+            users[userIndex] = user;
+            joinedUsers[userIndex] = true;
+            Console.WriteLine($"Last client id {userId} _ {user.clientId}");
+            Console.WriteLine($"Join {userId}");
+
+            var playerIdMessage =
+                new shared.Messages.PlayerIndex(packetCounter.Use(shared.Messages.PlayerIndex.Opcode),
+                    (byte)userIndex);
+            SenderNetMessage playerIdNetMessage = new SenderNetMessage(playerIdMessage, user.peer_addr,
+                user.peer_length,
+                socketfd,
+                () => { Console.WriteLine($"Player {user.clientId} received the id!"); });
+            Console.WriteLine("Added sender");
+
+            deliveryManager.AddSender(playerIdNetMessage);
+        }
+        else if (message is shared.Messages.Acknowledgment acknowledgment)
+        {
+            if (deliveryManager.ContainsSender(acknowledgment.GetAckOpcode, acknowledgment.PacketNumber,
+                    out var senderDelivery))
+            {
+                deliveryManager.RemoveSender(senderDelivery);
+                senderDelivery.cb();
+            }
+            else
+            {
+                Console.WriteLine("Received an acknowledgment for an unknown packet. Investigate.");
+            }
+        }
+        else if (message is shared.Messages.MovePaddle movePaddle)
+        {
+            // Same as !joinedUsers[0] || !joinedUsers[1]
+            if (!(joinedUsers[0] && joinedUsers[1]))
+            {
+                Console.WriteLine("Both player have not joined. Nothing to do.");
+            }
+            else
+            {
+                var enemyMovePaddleMessage =
+                    new shared.Messages.EnemyMovePaddle(packetCounter.Use(shared.Messages.EnemyMovePaddle.Opcode),
+                        movePaddle.PositionY);
+
+                if (foundUser == null) throw new Exception("Did not find an user who sent the move message");
+                var user = foundUser.Value;
+                User otherUser = users[0];
+
+                for (int i = 0; i < 2; i++)
+                    if (users[i].clientId != user.clientId)
+                        otherUser = users[i];
+
+
+                SendMessage(enemyMovePaddleMessage, otherUser.clientId);
+            }
+        }
+        else if (message is shared.Messages.Exit)
+        {
+            if (foundUser == null || userIndex == -1) throw new Exception("Got exit request from invalid user");
+            var user = foundUser.Value;
+            joinedUsers[userIndex] = false;
+            deliveryManager.DeleteUserRequests(user.peer_addr);
+        }
+    }
+
+    void UpdateBallState()
+    {
+        if (!(joinedUsers[0] && joinedUsers[1]))
+        {
+            return;
+        }
+
+        ball.PositionX += ball.VelocityX;
+        ball.PositionY += ball.VelocityY;
+
+        // TODO: Check if ball collides and act
+        var ballMessage = new shared.Messages.BallState(packetCounter.Use(shared.Messages.BallState.Opcode), ball,
+            DateTimeOffset.Now.ToUnixTimeMilliseconds());
+
+        for (int i = 0; i < 2; i++)
+        {
+            var user = users[i];
+            SendMessage(ballMessage, user.clientId);
         }
     }
 
@@ -211,8 +244,6 @@ unsafe
         var foundUser = Utils.FindById(users, client);
         if (foundUser == null) throw new Exception("SendMessage called with invalid id!");
         var user = foundUser.Value;
-
-
         Net.SendMessage(socketfd, message, user.peer_addr, user.peer_length);
     }
 }

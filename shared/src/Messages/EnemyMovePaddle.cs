@@ -11,10 +11,11 @@ public class EnemyMovePaddle(byte packetNumber, int positionY) : Message(packetN
         byte[] r = new byte[2 + sizeof(int)];
         r[0] = Opcode;
         r[1] = packetNumber;
-        for (int i = sizeof(int) - 1; i >= 0; i--)
+
+        var intPacked = shared.Utils.Pack(PositionY);
+        for (int i = 0; i < intPacked.Length; i++)
         {
-            // Pack int into 4 bytes
-            r[2 + (sizeof(int) - 1 - i)] = (byte)((_positionY >> (i * 8)) & 0xFF);
+            r[i + 2] = intPacked[i];
         }
 
         return r;
