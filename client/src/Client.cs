@@ -10,7 +10,16 @@ internal class Client
 {
     private static int socketfd;
     private static unsafe OS.AddrInfo* serverAddr;
+    private static int playerIndex = -1;
+    private static float deltaTime = 0f;
 
+    private static float paddleY = 300, enemyPaddleY = 300;
+
+    // TODO: Make this resizable, and scale according to the simulation size (Constants.GAME_WIDTH,GAME_HEIGHT)
+    private const int WINDOW_W = Constants.GAME_WIDTH, WINDOW_H = Constants.GAME_HEIGHT;
+    private static Ball ball = new();
+    private static List<long> fps = new(10);
+    private static int[] playersScore = new int[2];
 
     public static void Shutdown()
     {
@@ -71,18 +80,14 @@ internal class Client
         }
     }
 
-    private static int playerIndex = -1;
-    private static int paddleY = 300, enemyPaddleY = 300;
-    private const int WINDOW_W = 900, WINDOW_H = 600;
-    private static Ball ball = new();
 
     public static void Main()
     {
-        byte[] packetCounter = new byte[0xFF];
+        fps.Add(DateTimeOffset.Now.ToUnixTimeMilliseconds());
         NativeLibrary.SetDllImportResolver(typeof(Client).Assembly, Raylib.LoadRaylib);
 
         CreateConnection();
-        shared.Messages.Join joinMessage = new(packetCounter.Use(shared.Messages.Join.Opcode));
+        shared.Messages.Join joinMessage = new();
 
         Raylib.InitWindow(WINDOW_W, WINDOW_H, "Hello Raylib!");
 
@@ -109,7 +114,7 @@ internal class Client
             {
                 if (Raylib.WindowShouldClose() && requestedClose == -1)
                 {
-                    var exitPacket = new shared.Messages.Exit(packetCounter.Use(shared.Messages.Exit.Opcode));
+                    var exitPacket = new shared.Messages.Exit();
                     var senderMessage = new SenderNetMessage(exitPacket, serverAddr->ai_addr, serverAddr->ai_addrlen,
                         socketfd,
                         () => { });
@@ -120,22 +125,23 @@ internal class Client
 
                 deliveryManager.Update();
 
-                if (Raylib.IsKeyDown(Raylib.KEY_J))
+                if (Raylib.IsKeyDown(Raylib.KEY_J) || Raylib.IsKeyDown(Raylib.KEY_DOWN))
                 {
-                    int d = 5;
-                    paddleY -= d;
-                    new NetMessage(
-                        new shared.Messages.MovePaddle(packetCounter.Use(shared.Messages.MovePaddle.Opcode),
-                            paddleY), serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd).Send();
+                    paddleY = Math.Clamp(paddleY + Constants.PADDLE_SPEED * deltaTime, 0,
+                        Constants.GAME_HEIGHT - Constants.PADDLE_HEIGHT);
+                    deliveryManager.SendOneshot(new NetMessage(
+                        new shared.Messages.MovePaddle(
+                            (int)paddleY), serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd));
                 }
 
-                if (Raylib.IsKeyDown(Raylib.KEY_K))
+                if (Raylib.IsKeyDown(Raylib.KEY_K) || Raylib.IsKeyDown(Raylib.KEY_UP))
                 {
-                    int d = 5;
-                    paddleY += d;
-                    new NetMessage(
-                        new shared.Messages.MovePaddle(packetCounter.Use(shared.Messages.MovePaddle.Opcode),
-                            paddleY), serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd).Send();
+                    paddleY = Math.Clamp(paddleY - Constants.PADDLE_SPEED * deltaTime, 0,
+                        Constants.GAME_HEIGHT - Constants.PADDLE_HEIGHT);
+                    // paddleY -= Constants.PADDLE_SPEED * deltaTime;
+                    deliveryManager.SendOneshot(new NetMessage(
+                        new shared.Messages.MovePaddle(
+                            (int)paddleY), serverAddr->ai_addr, serverAddr->ai_addrlen, socketfd).Send());
                 }
 
                 int bytesReceived = OS.recvfrom(socketfd, buffer, size, 0, &peerAddr, &peerLen);
@@ -170,15 +176,14 @@ internal class Client
                     if (deliveryManager.ContainsReceiver(message.GetOpcode, serverAddr->ai_addr->sa_data,
                             message.PacketNumber, out var receiver))
                     {
-                        isDuplicate = true;
+                        receiver.SendAck();
                     }
                     else
                     {
                         receiver = new ReceiverNetMessage(message, serverAddr->ai_addr, serverAddr->ai_addrlen,
                             socketfd);
+                        deliveryManager.AddReceiver(receiver);
                     }
-
-                    deliveryManager.AddReceiver(receiver);
                 }
 
 
@@ -197,7 +202,8 @@ internal class Client
                     }
                     else
                     {
-                        Console.WriteLine("Received an acknowledgment for an unknown packet. Investigate.");
+                        Console.WriteLine(
+                            $"Received an acknowledgment for an unknown packet. Investigate. {acknowledgment.GetAckOpcode} {acknowledgment.PacketNumber}");
                     }
                 }
                 else if (message is shared.Messages.PlayerIndex playerIdMessage)
@@ -213,6 +219,11 @@ internal class Client
                 {
                     ball = ballState.Ball;
                 }
+                else if (message is shared.Messages.UpdateScore updateScore)
+                {
+                    playersScore[0] = updateScore.Player1Score;
+                    playersScore[1] = updateScore.Player2Score;
+                }
 
 
                 Console.WriteLine($"Received message: {message.GetType().Name}");
@@ -222,19 +233,58 @@ internal class Client
         }
     }
 
+    public static int CalculateFps()
+    {
+        if (fps.Count != 10) return 0;
+        List<double> dFps = new();
+        for (int i = 1; i < fps.Count; i++)
+        {
+            long timeDiff = fps[i] - fps[i - 1];
+            if (timeDiff > 0)
+            {
+                dFps.Add(1000.0 / timeDiff);
+            }
+        }
+
+        if (dFps.Count == 0) return 0;
+
+
+        return (int)dFps.Average();
+    }
+
+
     public static void Render()
     {
+        var avgFps = CalculateFps();
+        if (fps.Count >= 10)
+            fps.RemoveAt(0);
+
         Raylib.BeginDrawing();
         Raylib.ClearBackground(new Raylib.Color { r = 0x18, g = 0x18, b = 0x18, a = 0xFF });
 
         var enemyPlayerIndex = (playerIndex + 1) % 2;
+        var scoreString = $"{playersScore[0]}:{playersScore[1]}";
+        const int scoreSize = 20;
+        int textStringSize = Raylib.MeasureText(scoreString, scoreSize);
 
-        Raylib.DrawRectangle((playerIndex * WINDOW_W) - 100 * playerIndex, paddleY, 100, 300,
-            new Raylib.Color { r = 0x11, a = 0xFF });
-        Raylib.DrawRectangle(enemyPlayerIndex * WINDOW_W - 100 * enemyPlayerIndex, enemyPaddleY, 100, 300,
+        Raylib.DrawText($"{playersScore[0]}:{playersScore[1]}", Constants.GAME_WIDTH / 2 - textStringSize / 2, 20,
+            scoreSize,
+            new Raylib.Color { r = 0xFF, g = 0xFF, b = 0xFF, a = 0xFF });
+        Raylib.DrawRectangle((playerIndex * WINDOW_W) - Constants.PADDLE_WIDTH * playerIndex, (int)paddleY,
+            Constants.PADDLE_WIDTH,
+            Constants.PADDLE_HEIGHT,
             new Raylib.Color { r = 0xFF, a = 0xFF });
-        Raylib.DrawRectangle((int)ball.PositionX, (int)ball.PositionY, 10, 10, new Raylib.Color { g = 0xFF, a = 0xFF });
-        Thread.Sleep(50);
+        Raylib.DrawRectangle(enemyPlayerIndex * WINDOW_W - Constants.PADDLE_WIDTH * enemyPlayerIndex, (int)enemyPaddleY,
+            Constants.PADDLE_WIDTH, Constants.PADDLE_HEIGHT,
+            new Raylib.Color { r = 0x88, a = 0xFF });
+        Raylib.DrawCircle((int)ball.PositionX, (int)ball.PositionY, Constants.BALL_RADIUS,
+            new Raylib.Color { g = 0xFF, a = 0xFF });
+
+        Raylib.DrawText($"FPS:{avgFps}", 0, 0, 20,
+            new Raylib.Color { r = 0xFF, g = 0xFF, b = 0xFF, a = 0xFF });
+
         Raylib.EndDrawing();
+        fps.Add(DateTimeOffset.Now.ToUnixTimeMilliseconds());
+        if (fps.Count >= 2) deltaTime = (fps[^1] - fps[^2]) / 1000f;
     }
 }

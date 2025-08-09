@@ -1,6 +1,6 @@
 namespace shared.Messages;
 
-public class Echo(byte packetNumber, byte previousOpCode) : Message(packetNumber)
+public class Echo(byte previousOpCode) : Message
 {
     private byte previousOpcode = previousOpCode;
 
@@ -8,7 +8,7 @@ public class Echo(byte packetNumber, byte previousOpCode) : Message(packetNumber
     {
         var r = new byte[3];
         r[0] = Opcode;
-        r[1] = packetNumber;
+        r[1] = PacketNumber;
         r[2] = previousOpcode;
         return r;
     }

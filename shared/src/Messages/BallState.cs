@@ -2,7 +2,7 @@ using shared.GameObjects;
 
 namespace shared.Messages;
 
-public class BallState(byte packetNumber, Ball ball, long timeStamp) : Message(packetNumber)
+public class BallState(Ball ball, long timeStamp) : Message
 {
     public Ball Ball => ball;
 
@@ -10,7 +10,7 @@ public class BallState(byte packetNumber, Ball ball, long timeStamp) : Message(p
     {
         byte[] r = new byte[2 + sizeof(float) * 4 + sizeof(long)];
         r[0] = Opcode;
-        r[1] = packetNumber;
+        r[1] = PacketNumber;
 
         int offset = 2;
         var positionXPacked = Utils.Pack(ball.PositionX);

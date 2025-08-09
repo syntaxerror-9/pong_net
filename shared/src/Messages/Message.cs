@@ -2,13 +2,13 @@ using shared.GameObjects;
 
 namespace shared.Messages;
 
-public abstract class Message(byte _packetNumber)
+public abstract class Message
 {
     public abstract byte[] ToBytes();
 
     public abstract bool RequiresAck(CallMode ackFrom);
     public abstract byte GetOpcode { get; }
-    public byte PacketNumber { get; } = _packetNumber;
+    public byte PacketNumber { get; set; } // Note: Packet number will get set by the DeliveryManager
 
     public static unsafe Message FromBytes(byte* bytes, int packetSize)
     {
@@ -17,13 +17,12 @@ public abstract class Message(byte _packetNumber)
         switch (opcode)
         {
             case Join.Opcode:
-                return new Join(bytes[1]);
+                return new Join { PacketNumber = bytes[1] };
             case Exit.Opcode:
-                return new Exit(bytes[1]);
+                return new Exit { PacketNumber = bytes[1] };
             case MovePaddle.Opcode:
                 int paddleY = Utils.Unpack<int>(&bytes[2], sizeof(int));
-                return new MovePaddle(bytes[1], paddleY);
-
+                return new MovePaddle(paddleY) { PacketNumber = bytes[1] };
             case BallState.Opcode:
                 int offset = 2;
                 float positionX = Utils.Unpack<float>(&bytes[offset], sizeof(float));
@@ -35,20 +34,26 @@ public abstract class Message(byte _packetNumber)
                 float velocityY = Utils.Unpack<float>(&bytes[offset], sizeof(float));
                 offset += sizeof(float);
                 long timeStamp = Utils.Unpack<long>(&bytes[offset], sizeof(long));
-                return new BallState(bytes[1],
-                    new Ball
-                    {
-                        PositionX = positionX, PositionY = positionY, VelocityX = velocityX, VelocityY = velocityY
-                    }, timeStamp);
+                return new BallState(new Ball
+                {
+                    PositionX = positionX, PositionY = positionY, VelocityX = velocityX, VelocityY = velocityY
+                }, timeStamp) { PacketNumber = bytes[1] };
+            case UpdateScore.Opcode:
+                offset = 2;
+                int player1Score = Utils.Unpack<int>(&bytes[offset], sizeof(int));
+                offset += sizeof(int);
+                int player2Score = Utils.Unpack<int>(&bytes[offset], sizeof(int));
+                return new UpdateScore(player2Score, player1Score) { PacketNumber = bytes[1] };
             case EnemyMovePaddle.Opcode:
                 paddleY = Utils.Unpack<int>(&bytes[2], sizeof(int));
-                return new EnemyMovePaddle(bytes[1], paddleY);
+                return new EnemyMovePaddle(paddleY) { PacketNumber = bytes[1] };
             case Echo.Opcode:
-                return new Echo(bytes[1], bytes[2]);
+                return new Echo(bytes[2]) { PacketNumber = bytes[1] };
             case PlayerIndex.Opcode:
-                return new PlayerIndex(bytes[1], bytes[2]);
+                return new PlayerIndex(bytes[2]) { PacketNumber = bytes[1] };
             case Acknowledgment.Opcode:
-                return new Acknowledgment(bytes[1], bytes[2]);
+                return new Acknowledgment(bytes[2]) { PacketNumber = bytes[1] };
+
             default:
                 throw new Exception("Unknown opcode");
         }

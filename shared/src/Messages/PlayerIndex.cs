@@ -1,6 +1,6 @@
 namespace shared.Messages;
 
-public class PlayerIndex(byte packetNumber, byte index) : Message(packetNumber)
+public class PlayerIndex(byte index) : Message
 {
     public byte Index { get; } = index;
 
@@ -8,7 +8,7 @@ public class PlayerIndex(byte packetNumber, byte index) : Message(packetNumber)
     {
         var r = new byte[3];
         r[0] = Opcode;
-        r[1] = packetNumber;
+        r[1] = PacketNumber;
         r[2] = Index;
         return r;
     }

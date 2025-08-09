@@ -7,7 +7,8 @@ using Utils = server.Utils;
 
 // How many times the server sends update about events (ball position, matchend etc.) per second
 const int TPS = 60;
-const long TPMS = 1000 / 60;
+const long TPMS = 1000 / TPS;
+
 
 const int port = 8080;
 const string address = "127.0.0.1";
@@ -40,36 +41,38 @@ unsafe
 
     // Keeps track of the received packets from client. Sends ack if they send the same packet again.
     var deliveryManager = new DeliveryManager();
-
+    GameScore? gameScore = null;
     var ball = new Ball();
 
     User* users = stackalloc User[2];
     bool[] joinedUsers = new bool[2];
 
+
     nint size = 500;
     byte* buffer = stackalloc byte[(int)size];
-    byte[] packetCounter = new byte[0xFF];
-    bool isClient = false;
     long lastTick = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+    float deltaTime = 0f;
 
     while (true)
     {
         if (DateTimeOffset.Now.ToUnixTimeMilliseconds() - lastTick < TPMS)
         {
-            Thread.Sleep(10);
+            Thread.Sleep(1);
             continue;
         }
 
+        deltaTime = (DateTimeOffset.Now.ToUnixTimeMilliseconds() - lastTick) / 1000f;
         lastTick = DateTimeOffset.Now.ToUnixTimeMilliseconds();
 
         OS.SockAddr peer_addr = new();
         uint peer_len = (uint)sizeof(OS.SockAddr);
-        int flags = 0;
 
         deliveryManager.Update();
         UpdateBallState();
+        const int flags = 0;
         int bytesReceived = OS.recvfrom(socketfd, buffer, size, flags, &peer_addr, &peer_len);
 
+        // Process all the requests in a tick
         while (bytesReceived > 0)
         {
             shared.Messages.Message message = shared.Messages.Message.FromBytes(buffer, bytesReceived);
@@ -126,15 +129,14 @@ unsafe
                         message.PacketNumber,
                         out var receiver))
                 {
-                    Console.WriteLine("Was duplicate");
+                    receiver.SendAck();
                     isDuplicate = true;
                 }
                 else
                 {
                     receiver = new ReceiverNetMessage(message, user.peer_addr, user.peer_length, socketfd);
+                    deliveryManager.AddReceiver(receiver);
                 }
-
-                deliveryManager.AddReceiver(receiver);
             }
         }
 
@@ -156,12 +158,12 @@ unsafe
             userIndex = (lastUserIndex + 1) % 2;
             users[userIndex] = user;
             joinedUsers[userIndex] = true;
+
             Console.WriteLine($"Last client id {userId} _ {user.clientId}");
             Console.WriteLine($"Join {userId}");
 
             var playerIdMessage =
-                new shared.Messages.PlayerIndex(packetCounter.Use(shared.Messages.PlayerIndex.Opcode),
-                    (byte)userIndex);
+                new shared.Messages.PlayerIndex((byte)userIndex);
             SenderNetMessage playerIdNetMessage = new SenderNetMessage(playerIdMessage, user.peer_addr,
                 user.peer_length,
                 socketfd,
@@ -169,6 +171,8 @@ unsafe
             Console.WriteLine("Added sender");
 
             deliveryManager.AddSender(playerIdNetMessage);
+
+            if (joinedUsers[0] && joinedUsers[1]) InitializeGameState();
         }
         else if (message is shared.Messages.Acknowledgment acknowledgment)
         {
@@ -193,8 +197,7 @@ unsafe
             else
             {
                 var enemyMovePaddleMessage =
-                    new shared.Messages.EnemyMovePaddle(packetCounter.Use(shared.Messages.EnemyMovePaddle.Opcode),
-                        movePaddle.PositionY);
+                    new shared.Messages.EnemyMovePaddle(movePaddle.PositionY);
 
                 if (foundUser == null) throw new Exception("Did not find an user who sent the move message");
                 var user = foundUser.Value;
@@ -204,8 +207,9 @@ unsafe
                     if (users[i].clientId != user.clientId)
                         otherUser = users[i];
 
-
-                SendMessage(enemyMovePaddleMessage, otherUser.clientId);
+                var netMessage = new NetMessage(enemyMovePaddleMessage, otherUser.peer_addr, otherUser.peer_length,
+                    socketfd);
+                deliveryManager.SendOneshot(netMessage);
             }
         }
         else if (message is shared.Messages.Exit)
@@ -217,33 +221,62 @@ unsafe
         }
     }
 
+    void InitializeGameState()
+    {
+        ResetBallState();
+        gameScore = new GameScore(users[0], users[1], deliveryManager, socketfd, onResetReady: ResetBallState);
+    }
+
+    void ResetBallState()
+    {
+        ball.PositionX = Constants.GAME_WIDTH / 2f - Constants.BALL_RADIUS / 2f;
+        ball.PositionY = Constants.GAME_HEIGHT / 2f - Constants.BALL_RADIUS / 2f;
+
+        var randomAngle = new Random().NextSingle() * Math.PI * 2;
+        ball.VelocityX = (float)Math.Cos(randomAngle) * Constants.BALL_SPEED;
+        ball.VelocityY = (float)Math.Sin(randomAngle) * Constants.BALL_SPEED;
+    }
+
     void UpdateBallState()
     {
-        if (!(joinedUsers[0] && joinedUsers[1]))
+        if (!(joinedUsers[0] && joinedUsers[1]) || gameScore == null || gameScore.PendingNextRound)
         {
             return;
         }
 
-        ball.PositionX += ball.VelocityX;
-        ball.PositionY += ball.VelocityY;
+        ball.PositionX += ball.VelocityX * deltaTime;
+        ball.PositionY += ball.VelocityY * deltaTime;
 
-        // TODO: Check if ball collides and act
-        var ballMessage = new shared.Messages.BallState(packetCounter.Use(shared.Messages.BallState.Opcode), ball,
-            DateTimeOffset.Now.ToUnixTimeMilliseconds());
+
+        // It hit the top wall
+        if (ball.PositionY < Constants.BALL_RADIUS)
+        {
+            ball.VelocityY = -ball.VelocityY;
+        }
+
+        // It hit the bottom wall
+        if (Constants.GAME_HEIGHT - ball.PositionY < Constants.BALL_RADIUS)
+        {
+            ball.VelocityY = -ball.VelocityY;
+        }
+
+        if (ball.PositionX < Constants.BALL_RADIUS)
+        {
+            gameScore.OnUserScore(users[1].clientId);
+        }
+
+        if (Constants.GAME_WIDTH - ball.PositionX < Constants.BALL_RADIUS)
+        {
+            gameScore.OnUserScore(users[0].clientId);
+        }
+
+        var ballMessage = new shared.Messages.BallState(ball, DateTimeOffset.Now.ToUnixTimeMilliseconds());
 
         for (int i = 0; i < 2; i++)
         {
             var user = users[i];
-            SendMessage(ballMessage, user.clientId);
+            var netMessage = new NetMessage(ballMessage, user.peer_addr, user.peer_length, socketfd);
+            deliveryManager.SendOneshot(netMessage);
         }
-    }
-
-    void SendMessage(shared.Messages.Message message, int client)
-    {
-        Console.WriteLine($"Sending message to {client}");
-        var foundUser = Utils.FindById(users, client);
-        if (foundUser == null) throw new Exception("SendMessage called with invalid id!");
-        var user = foundUser.Value;
-        Net.SendMessage(socketfd, message, user.peer_addr, user.peer_length);
     }
 }

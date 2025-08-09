@@ -5,6 +5,9 @@ public class DeliveryManager
     public HashSet<SenderNetMessage> senderDeliveries { get; private set; } = new();
     public HashSet<ReceiverNetMessage> receiverDeliveries { get; private set; } = new();
 
+    private byte[] packetCounter = new byte[0xFF];
+
+
     private List<ReceiverNetMessage> deleteReceiverDeliveries = new();
 
 
@@ -61,17 +64,28 @@ public class DeliveryManager
     }
 
     // Adds to the HashMap and sends a message
-    public void AddSender(SenderNetMessage senderDelivery)
+    public void AddSender(SenderNetMessage senderDelivery, bool updatePacketNumber = true)
     {
+        if (updatePacketNumber)
+        {
+            senderDelivery.Message.PacketNumber = packetCounter.Use(senderDelivery.Message.GetOpcode);
+        }
+
         senderDelivery.SendMessage();
         senderDeliveries.Add(senderDelivery);
     }
 
-    // Adds to the HashMap and sends a ack
+    public void SendOneshot(NetMessage netMessage)
+    {
+        netMessage.Message.PacketNumber = packetCounter.Use(netMessage.Message.GetOpcode);
+        netMessage.Send();
+    }
+
+    // Adds to the HashSet and sends a ack
     public void AddReceiver(ReceiverNetMessage receiverDelivery)
     {
-        receiverDelivery.SendAck();
         receiverDeliveries.Add(receiverDelivery);
+        receiverDelivery.SendAck();
     }
 
     public unsafe void DeleteUserRequests(OS.SockAddr* sockAddr)

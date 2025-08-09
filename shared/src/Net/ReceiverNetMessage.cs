@@ -25,7 +25,7 @@ public unsafe class ReceiverNetMessage(
     public ReceiverNetMessage SendAck()
     {
         Console.WriteLine($"Sending ack for {message.GetOpcode} {message.PacketNumber}");
-        var ackMessage = new Messages.Acknowledgment(message.PacketNumber, message.GetOpcode);
+        var ackMessage = new Messages.Acknowledgment(message.GetOpcode) { PacketNumber = message.PacketNumber };
         Net.SendMessage(socketfd, ackMessage, targetAddr, targetAddrLen);
         return this;
     }

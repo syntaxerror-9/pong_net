@@ -1,12 +1,12 @@
 namespace shared.Messages;
 
-public class Join(byte packetNumber) : Message(packetNumber)
+public class Join : Message
 {
     public override byte[] ToBytes()
     {
         byte[] r = new byte[2];
         r[0] = Opcode;
-        r[1] = packetNumber;
+        r[1] = PacketNumber;
         return r;
     }
 

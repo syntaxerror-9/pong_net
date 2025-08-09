@@ -1,6 +1,6 @@
 namespace shared.Messages;
 
-public class MovePaddle(byte packetNumber, int positionY) : Message(packetNumber)
+public class MovePaddle(int positionY) : Message
 {
     private int _positionY = positionY;
 
@@ -10,7 +10,7 @@ public class MovePaddle(byte packetNumber, int positionY) : Message(packetNumber
     {
         byte[] r = new byte[2 + sizeof(int)];
         r[0] = Opcode;
-        r[1] = packetNumber;
+        r[1] = PacketNumber;
         for (int i = sizeof(int) - 1; i >= 0; i--)
         {
             // Pack int into 4 bytes

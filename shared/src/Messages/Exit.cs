@@ -1,12 +1,12 @@
 namespace shared.Messages;
 
-public class Exit(byte packetNumber) : Message(packetNumber)
+public class Exit : Message
 {
     public override byte[] ToBytes()
     {
         byte[] r = new byte[2];
         r[0] = Opcode;
-        r[1] = packetNumber;
+        r[1] = PacketNumber;
         return r;
     }
 

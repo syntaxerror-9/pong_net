@@ -1,6 +1,6 @@
 namespace shared.Messages;
 
-public class Acknowledgment(byte packetNumber, byte ackOpcode) : Message(packetNumber)
+public class Acknowledgment(byte ackOpcode) : Message
 {
     private byte ackOpcode = ackOpcode;
 
@@ -8,7 +8,7 @@ public class Acknowledgment(byte packetNumber, byte ackOpcode) : Message(packetN
     {
         var r = new byte[3];
         r[0] = Opcode;
-        r[1] = packetNumber;
+        r[1] = PacketNumber;
         r[2] = ackOpcode;
         return r;
     }
